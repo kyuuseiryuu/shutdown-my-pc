@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build frontend
+        run: bun run build:frontend
+
+      - name: Build executable
+        run: bun run build:exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: shutdown-my-pc-x64-windows
+          path: out/shutdown-my-pc.exe
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: shutdown-my-pc-x64-windows
+          path: .
+
+      - name: Generate checksum
+        run: sha256sum shutdown-my-pc.exe > checksums.txt && cat checksums.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Shutdown My PC ${{ github.ref_name }}
+          body: |
+            ## Shutdown My PC ${{ github.ref_name }}
+
+            ### 📥 Downloads
+
+            - **Windows x64** — `shutdown-my-pc-x64-windows.exe`
+
+            ### 🔒 Checksums
+
+            ```
+            $(cat checksums.txt)
+            ```
+
+            ### ⚙️ Usage
+
+            1. Download `shutdown-my-pc-x64-windows.exe`.
+            2. Run it directly — no installation required.
+            3. Open `http://localhost:3021/` in your browser.
+            4. (Optional) Place a shortcut in `shell:startup` to auto-start on boot.
+
+            > ⚠️ Windows-only. Power management relies on `shutdown.exe`.
+          files: |
+            shutdown-my-pc.exe
+            checksums.txt
+          draft: false
+          prerelease: false
