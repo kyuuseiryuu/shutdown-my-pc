@@ -47,7 +47,12 @@ jobs:
           path: .
 
       - name: Generate checksum
-        run: sha256sum shutdown-my-pc.exe > checksums.txt && cat checksums.txt
+        id: checksum
+        run: |
+          CHECKSUM=$(sha256sum shutdown-my-pc.exe | cut -d' ' -f1)
+          echo "$CHECKSUM  shutdown-my-pc.exe" > checksums.txt
+          echo "value=$CHECKSUM" >> "$GITHUB_OUTPUT"
+          cat checksums.txt
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -63,7 +68,7 @@ jobs:
             ### 🔒 Checksums
 
             ```
-            $(cat checksums.txt)
+            ${{ steps.checksum.outputs.value }}  shutdown-my-pc.exe
             ```
 
             ### ⚙️ Usage
