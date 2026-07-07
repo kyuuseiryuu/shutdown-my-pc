@@ -53,7 +53,7 @@ export function resolvePort(): number {
   if (envPort && /^\d+$/.test(envPort)) {
     return parseInt(envPort, 10);
   }
-  return 3000;
+  return 3021;
 }
 
 export function isWindows(): boolean {

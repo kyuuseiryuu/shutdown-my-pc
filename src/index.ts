@@ -3,6 +3,8 @@ import index from "./index.html";
 import { isWindows, PORT, runShutdownCommand, serverResolve, STATIC_DIR } from "./server/utils";
 
 const server = serve({
+  hostname: "0.0.0.0",
+  port: PORT,
   routes: {
     // Serve index.html for all unmatched routes.
     "/*": process.env.NODE_ENV === 'production' ? serverResolve : index,
