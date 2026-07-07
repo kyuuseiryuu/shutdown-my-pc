@@ -1,0 +1,28 @@
+{
+  "name": "shutdown-my-pc",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --hot src/index.ts",
+    "build:frontend": "bun build ./src/index.html --outdir=out/dist --target=browser --minify --define:process.env.NODE_ENV='\"production\"' --env='BUN_PUBLIC_*'",
+    "build:exe": "bun build ./src/index.ts --compile --outfile=out/shutdown-my-pc --define:process.env.NODE_ENV='\"production\"' --sourcemap=external --minify",
+    "build": "bun run build.js",
+    "start": "NODE_ENV=production bun src/index.ts"
+  },
+  "dependencies": {
+    "@ant-design/icons": "5.x",
+    "antd": "5.x",
+    "react": "^19",
+    "react-dom": "^19"
+  },
+  "devDependencies": {
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@types/bun": "latest"
+  },
+  "module": "src/index.ts",
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}
