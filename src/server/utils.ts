@@ -60,13 +60,17 @@ export function isWindows(): boolean {
   return process.platform === "win32";
 }
 
-export function runShutdownCommand(args: string[]): {
+export function runShutdownCommand(
+  args: string[],
+  customCmd?: string,
+): {
   ok: boolean;
   stdout: string;
   stderr: string;
   exitCode: number | null;
 } {
-  const fullCmd = ["shutdown", ...args];
+  const cmd = customCmd ?? "shutdown";
+  const fullCmd = [cmd, ...args];
 
   if (!isWindows()) {
     return {

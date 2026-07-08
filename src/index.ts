@@ -23,11 +23,11 @@ const server = serve({
       const force = url.searchParams.get("force") !== "false";
       const timeout = Math.max(0, Math.min(600, parseInt(url.searchParams.get("timeout") ?? "30", 10) || 30));
 
-      const ACTIONS: Record<string, { flag: string; label: string; noTimeout: boolean }> = {
+      const ACTIONS: Record<string, { flag?: string; useRundll?: boolean; label: string; noTimeout: boolean; noTimer?: boolean; noForce?: boolean }> = {
         shutdown:  { flag: "-s", label: "Shut down", noTimeout: false },
         restart:   { flag: "-r", label: "Restart", noTimeout: false },
-        hibernate: { flag: "-h", label: "Hibernate", noTimeout: false },
-        sleep:     { flag: "-hybrid", label: "Sleep", noTimeout: false },
+        hibernate: { flag: "-h", label: "Hibernate", noTimeout: false, noTimer: true, noForce: true },
+        sleep:     { useRundll: true, label: "Sleep", noTimeout: false, noTimer: true, noForce: true },
         logout:    { flag: "-l", label: "Log off", noTimeout: true },
       };
 
@@ -40,25 +40,40 @@ const server = serve({
         );
       }
 
-      const args = [def.flag];
-      if (force && !def.noTimeout) args.push("-f");
-      if (!def.noTimeout) args.push("-t", String(timeout));
+      let result: ReturnType<typeof runShutdownCommand>;
 
-      const result = runShutdownCommand(args);
+      if (def.useRundll) {
+        // Sleep uses rundll32 via cmd.exe
+        const sleepCmd = ["cmd.exe", "/c", "rundll32.exe powrprof.dll,SetSuspendState 0 1 0"];
+        result = runShutdownCommand(sleepCmd);
+      } else {
+        const args = [def.flag!];
+        if (!def.noTimer && !def.noTimeout) {
+          if (force) args.push("-f");
+          args.push("-t", String(timeout));
+        } else if (force && !def.noTimeout && !def.noForce) {
+          args.push("-f");
+        }
+        result = runShutdownCommand(args);
+      }
       const label = def.label;
-      const desc = def.noTimeout ? `${label}...` : `${label} in ${timeout} seconds`;
+      const desc = def.noTimeout || def.noTimer
+        ? `${label}...`
+        : `${label} in ${timeout} seconds`;
 
       if (result.ok) {
         console.log(`✅ ${desc}`);
       } else {
-        console.error(`❌ ${label} failed:`, result.stderr);
+        console.error(`❌ ${label} failed: exitCode=${result.exitCode}, stdout="${result.stdout}", stderr="${result.stderr}"`);
       }
 
       return Response.json(
         {
           ok: result.ok,
           action,
-          message: result.ok ? desc : `Failed to ${action}`,
+          message: result.ok
+            ? desc
+            : `Failed to ${action}: exitCode=${result.exitCode}, ${result.stderr || result.stdout || "No error output"}`,
           details: result.ok ? undefined : result.stderr,
         },
         { status: result.ok ? 200 : 500 },

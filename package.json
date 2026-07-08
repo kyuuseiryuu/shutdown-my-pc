@@ -13,13 +13,16 @@
   "dependencies": {
     "@ant-design/icons": "5.x",
     "antd": "5.x",
+    "i18next": "^26.3.5",
     "react": "^19",
-    "react-dom": "^19"
+    "react-dom": "^19",
+    "react-i18next": "^17.0.8"
   },
   "devDependencies": {
+    "@types/bun": "latest",
+    "@types/i18next": "^13.0.0",
     "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "@types/bun": "latest"
+    "@types/react-dom": "^19"
   },
   "module": "src/index.ts",
   "peerDependencies": {
