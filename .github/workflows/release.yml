@@ -40,7 +40,7 @@ jobs:
       - name: Download artifact
         uses: actions/download-artifact@v4
         with:
-          name: shutdown-my-pc-x64-windows
+          name: ShutdownMyPC-x64-windows
           path: .
 
       - name: Generate checksum
