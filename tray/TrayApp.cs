@@ -5,6 +5,7 @@ using System.IO;
 using System.Net.Http;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace ShutdownPcTray
@@ -14,6 +15,14 @@ namespace ShutdownPcTray
         [STAThread]
         static void Main()
         {
+            // Ensure single instance
+            bool createdNew;
+            using (new Mutex(true, "ShutdownMyPC-SingleInstance", out createdNew))
+            {
+                if (!createdNew)
+                    return;
+            }
+
             // Hide console window immediately
             var handle = GetConsoleWindow();
             ShowWindow(handle, 0);
@@ -33,9 +42,8 @@ namespace ShutdownPcTray
         static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     }
 
-    class TrayApp : IDisposable
+    partial class TrayApp : IDisposable
     {
-        // ── Win32 ──────────────────────────────────────────────────
         [DllImport("kernel32.dll")]
         static extern IntPtr GetConsoleWindow();
 
@@ -49,26 +57,26 @@ namespace ShutdownPcTray
         private string _serverExePath;
         private string _baseUrl = "http://localhost:3021";
 
-        // Embedded server marker
-        private static readonly byte[] MARKER = new byte[] {
-            (byte)'S', (byte)'M', (byte)'P', (byte)'C',
-            (byte)'_', (byte)'S', (byte)'R', (byte)'V', 0
-        };
+        // EMBEDDED_SERVER_LEN is defined by build.js which generates ServerSize.cs
+        // with the actual value. If ServerSize.cs doesn't exist, use 0 (standalone mode).
+#if EMBEDDED_SERVER_LEN
+        private const long SERVER_LEN = SERVER_LEN_BUILD;
+#else
+        private const long SERVER_LEN = 0;
+#endif
 
         public TrayApp()
         {
             _http = new HttpClient();
             _http.Timeout = TimeSpan.FromSeconds(5);
 
-            // Hide tray process console
             var handle = GetConsoleWindow();
             ShowWindow(handle, 0);
 
-            // Try to extract embedded server exe, or find adjacent file
             _serverExePath = ExtractServerExe();
             if (_serverExePath == null)
             {
-                // Fallback: look beside the tray exe
+                // Fallback: look for adjacent file
                 _serverExePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "shutdown-my-pc.exe");
                 if (!File.Exists(_serverExePath))
                     _serverExePath = "shutdown-my-pc.exe";
@@ -79,50 +87,50 @@ namespace ShutdownPcTray
         }
 
         /// <summary>
-        /// Extract the embedded server exe (appended after a marker at the end of this exe).
-        /// Returns the temp path, or null if not embedded.
+        /// Extract embedded server exe.
+        /// Structure: [tray exe N bytes] + [server exe SERVER_LEN bytes]
+        /// No marker, no padding — the server data is simply appended after the tray exe.
         /// </summary>
         private string ExtractServerExe()
         {
+            if (SERVER_LEN <= 0)
+                return null;
+
             try
             {
                 string selfPath = Assembly.GetExecutingAssembly().Location;
-                byte[] selfData = File.ReadAllBytes(selfPath);
-                int dataLen = selfData.Length;
+                long selfLen = new FileInfo(selfPath).Length;
+                long trayLen = selfLen - SERVER_LEN;
 
-                // Search for the marker from the end (it should be near the end)
-                for (int i = dataLen - MARKER.Length - 8 - 4; i >= Math.Max(0, dataLen - 1024 * 1024); i--)
+                if (trayLen <= 0 || trayLen > selfLen)
+                    return null;
+
+                // Extract server portion: from trayLen to end of file
+                string tempDir = Path.Combine(Path.GetTempPath(), "ShutdownMyPc");
+                Directory.CreateDirectory(tempDir);
+                string tempExe = Path.Combine(tempDir, "shutdown-my-pc.exe");
+
+                using (var src = File.OpenRead(selfPath))
+                using (var dst = new FileStream(tempExe, FileMode.Create, FileAccess.Write))
                 {
-                    bool found = true;
-                    for (int j = 0; j < MARKER.Length; j++)
+                    src.Seek(trayLen, SeekOrigin.Begin);
+                    byte[] buf = new byte[1024 * 1024]; // 1 MB buffer
+                    long remaining = SERVER_LEN;
+                    while (remaining > 0)
                     {
-                        if (selfData[i + j] != MARKER[j]) { found = false; break; }
+                        int read = src.Read(buf, 0, (int)Math.Min(buf.Length, remaining));
+                        if (read <= 0) break;
+                        dst.Write(buf, 0, read);
+                        remaining -= read;
                     }
-                    if (!found) continue;
-
-                    int markerEnd = i + MARKER.Length;
-                    // Read 8-byte length (little-endian)
-                    long serverLen = BitConverter.ToInt64(selfData, markerEnd);
-                    int serverStart = markerEnd + 8;
-
-                    if (serverLen <= 0 || serverStart + serverLen > dataLen)
-                        return null;
-
-                    // Extract to temp directory
-                    string tempDir = Path.Combine(Path.GetTempPath(), "ShutdownMyPc");
-                    Directory.CreateDirectory(tempDir);
-                    string tempExe = Path.Combine(tempDir, "shutdown-my-pc.exe");
-
-                    using (var fs = new FileStream(tempExe, FileMode.Create, FileAccess.Write))
-                    {
-                        fs.Write(selfData, serverStart, (int)serverLen);
-                    }
-
-                    return tempExe;
                 }
+
+                return tempExe;
             }
-            catch { }
-            return null;
+            catch
+            {
+                return null;
+            }
         }
 
         private void StartServer()
@@ -136,8 +144,6 @@ namespace ShutdownPcTray
                 psi.RedirectStandardOutput = true;
                 psi.RedirectStandardError = true;
                 _serverProc = Process.Start(psi);
-
-                // Detach stdout/stderr readers to avoid deadlocks
                 _serverProc.BeginOutputReadLine();
                 _serverProc.BeginErrorReadLine();
             }
@@ -157,7 +163,7 @@ namespace ShutdownPcTray
                         return;
                 }
                 catch { }
-                System.Threading.Thread.Sleep(500);
+                Thread.Sleep(500);
             }
         }
 
@@ -169,7 +175,6 @@ namespace ShutdownPcTray
             _tray.Visible = true;
 
             var menu = new ContextMenuStrip();
-
             menu.Items.Add("打开面板", null, OnOpen);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("取消计划操作", null, (s, e) => CallApi("/api/cancel", ""));
@@ -178,6 +183,17 @@ namespace ShutdownPcTray
 
             _tray.ContextMenuStrip = menu;
             _tray.DoubleClick += OnOpen;
+
+            // Startup balloon after 2s
+            var startupTimer = new System.Threading.Timer(_ =>
+            {
+                try
+                {
+                    _tray.ShowBalloonTip(3000, "Shutdown My PC",
+                        "程序已启动，托盘菜单可管理电源操作", ToolTipIcon.Info);
+                }
+                catch { }
+            }, null, 2000, System.Threading.Timeout.Infinite);
         }
 
         private Icon LoadTrayIcon()
@@ -194,7 +210,6 @@ namespace ShutdownPcTray
             }
         }
 
-        // ICO file embedded as base64 (1513 bytes)
         private static readonly string ICON_B64 =
             "AAABAAEAQEAAAAEAIADTBQAAFgAAAIlQTkcNChoKAAAADUlIRFIAAABAAAAAQAgGAAAAqmlx3gAAAAFz" +
             "UkdCAK7OHOkAAAAEZ0FNQQAAsY8L/GEFAAAACXBIWXMAAA7DAAAOwwHHb6hkAAAFaElEQVR4Xu2bPWzc" +
@@ -253,7 +268,6 @@ namespace ShutdownPcTray
         {
             _tray.Visible = false;
             try { _serverProc.Kill(); } catch { }
-            // Cleanup extracted exe
             try { if (_serverExePath != null && _serverExePath.Contains(Path.GetTempPath())) File.Delete(_serverExePath); } catch { }
             Application.Exit();
         }
