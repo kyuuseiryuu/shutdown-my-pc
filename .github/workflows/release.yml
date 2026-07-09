@@ -58,10 +58,15 @@ jobs:
           body: |
             ## Shutdown My PC ${{ github.ref_name }}
 
-            ### 📥 Downloads
+            ### 📥 Download
 
             - **Windows x64** — `ShutdownMyPC.exe` (single file, includes tray + server)
 
             ### 🔒 Checksums
-
+            ${{ steps.checksum.outputs.value }}  ShutdownMyPC.exe
+          files: |
+            ShutdownMyPC.exe
+            checksums.txt
+          draft: false
+          prerelease: false
 
