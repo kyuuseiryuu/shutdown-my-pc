@@ -70,7 +70,7 @@ namespace ShutdownPcTray {
 `.trim();
   writeFileSync(serverSizeFile, serverSizeContent);
 
-  const result = await $`"${CSC}" -target:winexe -win32icon:"${TRAY_ICO}" -define:EMBEDDED_SERVER_LEN -reference:System.Windows.Forms.dll -reference:System.Drawing.dll -reference:System.Net.Http.dll -out:"${TRAY_TMP}" "${TRAY_SRC}" "${serverSizeFile}"`.nothrow().quiet();
+  const result = await $`"${CSC}" -target:winexe -win32icon:"${TRAY_ICO}" -define:EMBEDDED_SERVER_LEN -reference:System.Windows.Forms.dll -reference:System.Drawing.dll -reference:System.Net.Http.dll -reference:Microsoft.VisualBasic.dll -out:"${TRAY_TMP}" "${TRAY_SRC}" "${serverSizeFile}"`.nothrow().quiet();
 
   if (result.exitCode === 0 && existsSync(TRAY_TMP)) {
     const kb = statSync(TRAY_TMP).size / 1024;

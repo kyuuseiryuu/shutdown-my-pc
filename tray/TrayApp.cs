@@ -30,9 +30,66 @@ namespace ShutdownPcTray
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
-            var app = new TrayApp();
+            // Let the user enter a port if the default is taken
+            int port = PromptForPortIfBusy(3021);
+            if (port < 0) return; // user cancelled
+
+            var app = new TrayApp(port);
             Application.Run();
             app.Dispose();
+        }
+
+        /// <summary>
+        /// Check if a TCP port is free. If not, show an InputBox for a new port.
+        /// Returns -1 if user cancelled, or a valid available port.
+        /// </summary>
+        private static int PromptForPortIfBusy(int defaultPort)
+        {
+            int port = defaultPort;
+            while (port > 0)
+            {
+                if (IsPortFree(port))
+                    return port;
+
+                string input = Microsoft.VisualBasic.Interaction.InputBox(
+                    string.Format("端口 {0} 已被占用，请输入新的监听端口：", port),
+                    "端口冲突",
+                    (port + 1).ToString(),
+                    -1, -1);
+
+                if (string.IsNullOrWhiteSpace(input))
+                    return -1; // cancelled
+
+                if (!int.TryParse(input.Trim(), out port) || port < 1 || port > 65535)
+                {
+                    MessageBox.Show("无效端口号（1-65535），请重试。", "输入错误",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    port = -2; // retry
+                }
+            }
+            return -1;
+        }
+
+        private static bool IsPortFree(int port)
+        {
+            try
+            {
+                using (var tcp = new System.Net.Sockets.TcpClient())
+                {
+                    var ar = tcp.BeginConnect("127.0.0.1", port, null, null);
+                    bool connected = ar.AsyncWaitHandle.WaitOne(500);
+                    if (connected)
+                    {
+                        tcp.EndConnect(ar);
+                        return false; // can connect = in use
+                    }
+                    return true; // can't connect = free
+                }
+            }
+            catch
+            {
+                return true;
+            }
         }
 
         [DllImport("kernel32.dll")]
@@ -55,7 +112,8 @@ namespace ShutdownPcTray
         private HttpClient _http;
         private Process _serverProc;
         private string _serverExePath;
-        private string _baseUrl = "http://localhost:3021";
+        private string _baseUrl;
+        private int _port;
 
         // EMBEDDED_SERVER_LEN is defined by build.js which generates ServerSize.cs
         // with the actual value. If ServerSize.cs doesn't exist, use 0 (standalone mode).
@@ -65,8 +123,10 @@ namespace ShutdownPcTray
         private const long SERVER_LEN = 0;
 #endif
 
-        public TrayApp()
+        public TrayApp(int port)
         {
+            _port = port;
+            _baseUrl = string.Format("http://localhost:{0}", port);
             _http = new HttpClient();
             _http.Timeout = TimeSpan.FromSeconds(5);
 
@@ -143,11 +203,17 @@ namespace ShutdownPcTray
                 psi.WindowStyle = ProcessWindowStyle.Hidden;
                 psi.RedirectStandardOutput = true;
                 psi.RedirectStandardError = true;
+                psi.EnvironmentVariables["PORT"] = _port.ToString();
                 _serverProc = Process.Start(psi);
                 _serverProc.BeginOutputReadLine();
                 _serverProc.BeginErrorReadLine();
             }
-            catch { }
+            catch (Exception ex)
+            {
+                if (_tray != null)
+                    _tray.ShowBalloonTip(3000, "启动失败", ex.Message, ToolTipIcon.Error);
+                Environment.Exit(1);
+            }
         }
 
         public void WaitForServer()
