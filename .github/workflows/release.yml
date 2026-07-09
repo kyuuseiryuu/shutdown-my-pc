@@ -24,17 +24,14 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Build frontend
-        run: bun run build:frontend
+      - name: Build (frontend + server + tray + merge)
+        run: bun run build
 
-      - name: Build executable
-        run: bun run build:exe
-
-      - name: Upload artifact
+      - name: Upload artifact (merged single-file)
         uses: actions/upload-artifact@v4
         with:
           name: shutdown-my-pc-x64-windows
-          path: out/shutdown-my-pc.exe
+          path: out/ShutdownMyPC.exe
 
   release:
     needs: build
@@ -49,8 +46,8 @@ jobs:
       - name: Generate checksum
         id: checksum
         run: |
-          CHECKSUM=$(sha256sum shutdown-my-pc.exe | cut -d' ' -f1)
-          echo "$CHECKSUM  shutdown-my-pc.exe" > checksums.txt
+          CHECKSUM=$(sha256sum ShutdownMyPC.exe | cut -d' ' -f1)
+          echo "$CHECKSUM  ShutdownMyPC.exe" > checksums.txt
           echo "value=$CHECKSUM" >> "$GITHUB_OUTPUT"
           cat checksums.txt
 
@@ -63,24 +60,8 @@ jobs:
 
             ### 📥 Downloads
 
-            - **Windows x64** — `shutdown-my-pc-x64-windows.exe`
+            - **Windows x64** — `ShutdownMyPC.exe` (single file, includes tray + server)
 
             ### 🔒 Checksums
 
-            ```
-            ${{ steps.checksum.outputs.value }}  shutdown-my-pc.exe
-            ```
 
-            ### ⚙️ Usage
-
-            1. Download `shutdown-my-pc-x64-windows.exe`.
-            2. Run it directly — no installation required.
-            3. Open `http://localhost:3021/` in your browser.
-            4. (Optional) Place a shortcut in `shell:startup` to auto-start on boot.
-
-            > ⚠️ Windows-only. Power management relies on `shutdown.exe`.
-          files: |
-            shutdown-my-pc.exe
-            checksums.txt
-          draft: false
-          prerelease: false
