@@ -16,7 +16,7 @@
 - **家庭实验室机器** — 无需 RDP 即可远程关闭
 - **用于远程串流的游戏 PC** — 在会话结束后关机而无需登录
 
-将程序设置为**Windows 开机启动**，只要机器开着，Web UI 就会自动可用。无需 RDP、无需远程桌面 — 只需打开浏览器标签页。
+将程序设置为 **Windows 开机启动**，只要机器开着，Web UI 就会自动可用。无需 RDP、无需远程桌面 — 只需打开浏览器标签页。
 
 > 🔒 **安全提示：** 此工具通过 HTTP 暴露电源管理命令。**切勿**直接暴露到公网。使用 **VPN**（Tailscale、WireGuard、OpenVPN）远程访问，或在前面放置**反向代理**（NGINX、Caddy）配合**基本认证**或 **OAuth2** 中间件。
 
@@ -27,73 +27,43 @@
 - **强制关闭应用** — 可选择强制关闭正在运行的程序
 - **取消计划操作** — 一键取消任何待执行的关机
 - **深色主题** — 基于 [Ant Design 5](https://ant.design/) 和自定义 CSS 的现代化深色界面
-- **基于 Bun** — 使用 [Bun](https://bun.sh) 构建，快速全能的 JavaScript 运行时
-- **单个可执行文件** — 编译成一个 `.exe` 文件，自带托盘图标和服务器
+- **完全便携** — 单个 ~1 MB `.exe`，前端和 HTTP 服务器内嵌其中
+- **无需运行时** — 内置 C# `HttpListener`，无需 Bun/Node.js
 - **端口冲突处理** — 端口 3021 被占用时弹出对话框输入新端口
 - **单实例运行** — 每次只允许一个实例运行
 
-> **注意：** 电源管理 API（`shutdown.exe`）**仅支持 Windows**。在其他平台上服务器会优雅地返回错误。
+> **注意：** 电源管理 API（`shutdown.exe`）**仅支持 Windows**。
 
 ## 🚀 开始使用
 
-### 环境要求
+### 下载
 
-- 安装 [Bun](https://bun.sh) v1.x
-- **Windows**（电源 API 功能；界面在其他平台上仍然可以渲染）
+从 [Releases](https://github.com/kyuuseiryuu/shutdown-my-pc/releases) 下载最新的 `ShutdownMyPC.exe` — 无需安装。
 
-### 安装
+### 从源码构建
+
+#### 环境要求
+
+- [Bun](https://bun.sh) v1.x（仅用于构建前端）
+- **Windows**（需 .NET Framework 4.5+，现代 Windows 已预装）
+- C# 编译器（`csc.exe`，随 .NET Framework 附带）
+
+#### 构建
 
 ```bash
 bun install
-```
-
-### 开发模式
-
-启动带热模块替换（HMR）的开发服务器：
-
-```bash
-bun dev
-```
-
-服务器默认在 `http://localhost:3021` 启动。  
-通过 `PORT` 环境变量或 CLI 参数覆盖端口：
-
-```bash
-PORT=8080 bun dev
-# 或
-bun dev 8080
-```
-
-### 生产构建
-
-构建前端资源并编译独立可执行文件：
-
-```bash
 bun run build          # 构建单个 out/ShutdownMyPC.exe
 ```
 
-分步执行：
-
-```bash
-bun run build:frontend # 输出到 out/dist/
-bun run build:exe      # 编译到 out/shutdown-my-pc.exe
-```
-
-启动生产服务器：
-
-```bash
-bun start
-```
-
-生产模式下服务器会自动打开浏览器。
+输出是一个原生 Windows 可执行文件，所有前端文件都已内嵌其中。
 
 ### 📌 设置为 Windows 开机启动
 
 1. 按 **Win + R**，输入 `shell:startup` 并回车，打开**启动**文件夹。
-2. 创建 `out/ShutdownMyPC.exe` 的快捷方式。
-3. 现在每次开机时服务器和托盘图标都会自动启动。
+2. 创建 `ShutdownMyPC.exe` 的快捷方式。
+3. 现在每次开机时托盘图标和服务器都会自动启动。
 
-之后，只要机器开机，服务器就在后台运行，你可以通过 `http://<你的电脑IP>:3021/` 从局域网任何设备访问界面。
+之后，你可以通过 `http://<你的电脑IP>:3021/` 从局域网任何设备访问界面。
 
 ## 🔒 安全性（重要）
 
@@ -189,12 +159,12 @@ echo "user:$(openssl passwd -apr1)" > /etc/nginx/.htpasswd
 
 | 层      | 技术 |
 |---------|------|
-| 运行时  | [Bun](https://bun.sh) |
+| HTTP 服务器 | C# `HttpListener` (.NET Framework) |
 | 前端    | React 19 + TypeScript |
 | UI      | Ant Design 5 + @ant-design/icons |
 | 样式    | 自定义 CSS + CSS 自定义属性 |
-| 托盘    | C# (System.Windows.Forms) |
-| 打包    | Bun 内置打包器 + HMR |
+| 托盘    | C# `NotifyIcon` (System.Windows.Forms) |
+| 打包    | Bun（仅用于前端构建） |
 
 ## 📁 项目结构
 
@@ -203,18 +173,20 @@ shutdown-my-pc/
 ├── screenshots/
 │   └── screenshots.png
 ├── src/
-│   ├── server/
-│   │   └── utils.ts        # 服务器工具（端口、关机、静态文件）
 │   ├── App.tsx              # 主 React 组件
 │   ├── frontend.tsx         # React 入口
 │   ├── index.css            # 全局样式
 │   ├── index.html           # HTML 模板
-│   └── index.ts             # 服务器入口 + API 路由
+│   └── index.ts             # 服务器入口（仅开发模式）
 ├── tray/
-│   ├── TrayApp.cs           # 系统托盘封装（C#）
-│   ├── tray-icon.ico        # 自定义托盘图标
-│   └── ServerSize.cs        # 由 build.js 自动生成
-├── build.js                 # 构建脚本
+│   ├── Program.cs           # 入口 + 端口冲突检测
+│   ├── TrayApp.cs           # 系统托盘封装 (NotifyIcon)
+│   ├── HttpServer.cs        # HTTP 服务器 (HttpListener)
+│   ├── PowerManager.cs      # shutdown.exe 封装
+│   ├── StaticFiles.cs       # 内嵌文件存储
+│   ├── EmbeddedFiles.cs     # 由 build.js 自动生成
+│   └── tray-icon.ico        # 自定义托盘图标
+├── build.js                 # 构建脚本（生成 EmbeddedFiles.cs，编译）
 ├── package.json
 └── tsconfig.json
 ```

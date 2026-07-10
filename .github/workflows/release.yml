@@ -60,13 +60,7 @@ jobs:
 
             ### 📥 Download
 
-            - **Windows x64** — `ShutdownMyPC.exe` (single file, includes tray + server)
+            - **Windows x64** — `ShutdownMyPC.exe` (~1 MB, single file, fully portable)
 
             ### 🔒 Checksums
-            ${{ steps.checksum.outputs.value }}  ShutdownMyPC.exe
-          files: |
-            ShutdownMyPC.exe
-            checksums.txt
-          draft: false
-          prerelease: false
 

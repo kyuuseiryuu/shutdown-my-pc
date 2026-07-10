@@ -27,75 +27,43 @@
 - **強制終了** — 実行中のアプリケーションを強制的に閉じる（オプション）
 - **予約操作のキャンセル** — ボタン一つで保留中のシャットダウンを中断
 - **ダークテーマ** — [Ant Design 5](https://ant.design/) とカスタム CSS によるモダンな暗色 UI
-- **Bun ベース** — 高速なオールインワン JavaScript ランタイム [Bun](https://bun.sh) で構築
-- **単一実行ファイル** — 1 つの `.exe` ファイルにトレイアイコンとサーバーを内蔵
+- **完全ポータブル** — 単一の ~1 MB `.exe` ファイル、フロントエンドと HTTP サーバーを内蔵
+- **ランタイム不要** — 内蔵 C# `HttpListener`、Bun/Node.js 不要
 - **ポート競合処理** — ポート 3021 が使用中の場合は新しいポートを入力するダイアログを表示
 - **単一インスタンス** — 同時に 1 つのインスタンスのみ実行
 
-> **注意：** 電源管理 API（`shutdown.exe`）は **Windows 専用** です。他のプラットフォームではエラーを返します。
+> **注意：** 電源管理 API（`shutdown.exe`）は **Windows 専用** です。
 
 ## 🚀 はじめに
 
-### 前提条件
+### ダウンロード
 
-- [Bun](https://bun.sh) v1.x がインストールされていること
-- **Windows**（電源 API 機能用；UI は他のプラットフォームでも表示されます）
+[Releases](https://github.com/kyuuseiryuu/shutdown-my-pc/releases) から最新の `ShutdownMyPC.exe` をダウンロード — インストール不要。
 
-### インストール
+### ソースからビルド
+
+#### 前提条件
+
+- [Bun](https://bun.sh) v1.x（フロントエンドのビルドのみに使用）
+- **Windows**（.NET Framework 4.5+、最新の Windows ではプリインストール済み）
+- C# コンパイラ（`csc.exe`、.NET Framework に付属）
+
+#### ビルド
 
 ```bash
 bun install
-```
-
-### 開発モード
-
-ホットモジュールリプレイス（HMR）付きで開発サーバーを起動：
-
-```bash
-bun dev
-```
-
-サーバーはデフォルトで `http://localhost:3021` で起動します。  
-`PORT` 環境変数または CLI 引数でポートを変更：
-
-```bash
-PORT=8080 bun dev
-# または
-bun dev 8080
-```
-
-### プロダクションビルド
-
-フロントエンドアセットをビルドし、スタンドアロン実行ファイルをコンパイル：
-
-```bash
 bun run build          # 単一の out/ShutdownMyPC.exe を生成
 ```
 
-ステップ実行：
-
-```bash
-bun run build:frontend # out/dist/ に出力
-bun run build:exe      # out/shutdown-my-pc.exe にコンパイル
-```
-
-プロダクションサーバーを起動：
-
-```bash
-bun start
-```
-
-プロダクションモードではサーバーが自動的にブラウザを開きます。
+出力はすべてのフロントエンドファイルを内蔵したネイティブ Windows 実行ファイルです。
 
 ### 📌 Windows スタートアップに登録
 
-PC 起動時に自動的に Web UI を使えるようにするには：
-
 1. **Win + R** を押し、`shell:startup` と入力して Enter を押し、**スタートアップ** フォルダを開きます。
-2. `out/ShutdownMyPC.exe` へのショートカットを作成します。
-3. これで毎回起動時にサーバーとトレイアイコンが自動的に起動します。
+2. `ShutdownMyPC.exe` へのショートカットを作成します。
+3. 毎回起動時にトレイアイコンとサーバーが自動的に起動します。
 
-以降、PC の電源が入っている間はサーバーがバックグラウンドで動作し、`http://<PCのIP>:3021/` でローカルネットワーク上の任意のデバイスから UI にアクセスできます。
+`http://<PCのIP>:3021/` でローカルネットワーク上の任意のデバイスから UI にアクセスできます。
 
 ## 🔒 セキュリティ（重要）
 
@@ -191,12 +159,12 @@ echo "user:$(openssl passwd -apr1)" > /etc/nginx/.htpasswd
 
 | 層       | 技術 |
 |----------|------|
-| ランタイム | [Bun](https://bun.sh) |
+| HTTP サーバー | C# `HttpListener` (.NET Framework) |
 | フロントエンド | React 19 + TypeScript |
 | UI      | Ant Design 5 + @ant-design/icons |
 | スタイリング | カスタム CSS + CSS カスタムプロパティ |
-| トレイ   | C# (System.Windows.Forms) |
-| バンドル | Bun 内蔵バンドラー + HMR |
+| トレイ   | C# `NotifyIcon` (System.Windows.Forms) |
+| バンドラ | Bun（フロントエンドビルドのみ） |
 
 ## 📁 プロジェクト構成
 
@@ -205,18 +173,20 @@ shutdown-my-pc/
 ├── screenshots/
 │   └── screenshots.png
 ├── src/
-│   ├── server/
-│   │   └── utils.ts        # サーバーユーティリティ（ポート、シャットダウン、静的ファイル）
 │   ├── App.tsx              # メイン React コンポーネント
 │   ├── frontend.tsx         # React エントリポイント
 │   ├── index.css            # グローバルスタイル
 │   ├── index.html           # HTML テンプレート
-│   └── index.ts             # サーバーエントリポイント + API ルート
+│   └── index.ts             # サーバーエントリポイント（開発モードのみ）
 ├── tray/
-│   ├── TrayApp.cs           # システムトレイラッパー（C#）
-│   ├── tray-icon.ico        # カスタムトレイアイコン
-│   └── ServerSize.cs        # build.js が自動生成
-├── build.js                 # ビルドスクリプト
+│   ├── Program.cs           # エントリポイント + ポート競合検出
+│   ├── TrayApp.cs           # システムトレイラッパー (NotifyIcon)
+│   ├── HttpServer.cs        # HTTP サーバー (HttpListener)
+│   ├── PowerManager.cs      # shutdown.exe ラッパー
+│   ├── StaticFiles.cs       # 内蔵ファイルストレージ
+│   ├── EmbeddedFiles.cs     # build.js が自動生成
+│   └── tray-icon.ico        # カスタムトレイアイコン
+├── build.js                 # ビルドスクリプト（EmbeddedFiles.cs 生成、コンパイル）
 ├── package.json
 └── tsconfig.json
 ```
