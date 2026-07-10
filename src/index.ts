@@ -1,6 +1,6 @@
 import { serve } from "bun";
 import index from "./index.html";
-import { isWindows, PORT, runShutdownCommand, serverResolve, STATIC_DIR } from "./server/utils";
+import { isWindows, PORT, runPowerCommandAsync, runShutdownCommand, serverResolve, STATIC_DIR } from "./server/utils";
 
 const server = serve({
   hostname: "0.0.0.0",
@@ -40,12 +40,18 @@ const server = serve({
         );
       }
 
-      let result: ReturnType<typeof runShutdownCommand>;
+      // Fire-and-forget: don't wait for shutdown.exe to complete
+      // because the process may kill the server before the HTTP response is sent.
+      let ok: boolean;
+      const label = def.label;
+      const desc = def.noTimeout || def.noTimer
+        ? `${label}...`
+        : `${label} in ${timeout} seconds`;
 
       if (def.useRundll) {
         // Sleep uses rundll32 via cmd.exe
         const sleepCmd = ["cmd.exe", "/c", "rundll32.exe powrprof.dll,SetSuspendState 0 1 0"];
-        result = runShutdownCommand(sleepCmd);
+        ok = runPowerCommandAsync(sleepCmd);
       } else {
         const args = [def.flag!];
         if (!def.noTimer && !def.noTimeout) {
@@ -54,29 +60,22 @@ const server = serve({
         } else if (force && !def.noTimeout && !def.noForce) {
           args.push("-f");
         }
-        result = runShutdownCommand(args);
+        ok = runPowerCommandAsync(args);
       }
-      const label = def.label;
-      const desc = def.noTimeout || def.noTimer
-        ? `${label}...`
-        : `${label} in ${timeout} seconds`;
 
-      if (result.ok) {
+      if (ok) {
         console.log(`✅ ${desc}`);
       } else {
-        console.error(`❌ ${label} failed: exitCode=${result.exitCode}, stdout="${result.stdout}", stderr="${result.stderr}"`);
+        console.error(`❌ ${label} failed`);
       }
 
       return Response.json(
         {
-          ok: result.ok,
+          ok,
           action,
-          message: result.ok
-            ? desc
-            : `Failed to ${action}: exitCode=${result.exitCode}, ${result.stderr || result.stdout || "No error output"}`,
-          details: result.ok ? undefined : result.stderr,
+          message: ok ? desc : `Failed to execute ${action}`,
         },
-        { status: result.ok ? 200 : 500 },
+        { status: ok ? 200 : 500 },
       );
     },
 

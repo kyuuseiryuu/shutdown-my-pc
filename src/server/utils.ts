@@ -94,6 +94,29 @@ export function runShutdownCommand(
     return { ok: false, stdout: "", stderr: msg, exitCode: null };
   }
 }
+
+/**
+ * Fire-and-forget: run a command asynchronously, never waiting for the result.
+ * Used for power actions (shutdown, restart) where the process may terminate
+ * the server before a response can be sent.
+ */
+export function runPowerCommandAsync(
+  args: string[],
+  customCmd?: string,
+): boolean {
+  const cmd = customCmd ?? "shutdown";
+  const fullCmd = [cmd, ...args];
+
+  if (!isWindows()) return false;
+
+  try {
+    const proc = Bun.spawn(fullCmd);
+    proc.unref(); // Don't wait for the process
+    return true;
+  } catch {
+    return false;
+  }
+}
 export const serverResolve = async (req: Request) => {
       const url = new URL(req.url);
       let filePath = url.pathname.replace(/^\//, "");
