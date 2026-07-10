@@ -12,7 +12,7 @@ namespace ShutdownPcTray
     /// </summary>
     class HttpServer : IDisposable
     {
-        private readonly HttpListener _listener;
+        private HttpListener _listener;
         private readonly int _port;
         private Thread _listenThread;
         private volatile bool _running;
@@ -20,24 +20,46 @@ namespace ShutdownPcTray
         public HttpServer(int port)
         {
             _port = port;
-            _listener = new HttpListener();
-            _listener.Prefixes.Add(string.Format("http://localhost:{0}/", port));
         }
 
         public void Start()
         {
-            try
-            {
-                _listener.Start();
-                _running = true;
-                _listenThread = new Thread(ListenLoop);
-                _listenThread.IsBackground = true;
-                _listenThread.Start();
-            }
-            catch (Exception ex)
+            // Try to bind to + (0.0.0.0) first — allows access from all network interfaces.
+            // If access is denied (not running as admin / no URL ACL), fall back to localhost-only.
+            _listener = TryStart("+") ?? TryStart("localhost");
+            if (_listener == null)
             {
                 throw new InvalidOperationException(
-                    string.Format("Failed to start HTTP server on port {0}: {1}", _port, ex.Message), ex);
+                    string.Format("Failed to start HTTP server on port {0}. " +
+                    "Try running as administrator, or use: netsh http add urlacl url=http://+:{0}/ user=everyone",
+                    _port));
+            }
+
+            _running = true;
+            _listenThread = new Thread(ListenLoop);
+            _listenThread.IsBackground = true;
+            _listenThread.Start();
+        }
+
+        private HttpListener TryStart(string host)
+        {
+            try
+            {
+                var listener = new HttpListener();
+                listener.Prefixes.Add(string.Format("http://{0}:{1}/", host, _port));
+                listener.Start();
+                return listener;
+            }
+            catch (HttpListenerException ex)
+            {
+                // Access denied (error code 5) — will try next host
+                if (ex.ErrorCode == 5)
+                    return null;
+                throw;
+            }
+            catch
+            {
+                return null;
             }
         }
 
