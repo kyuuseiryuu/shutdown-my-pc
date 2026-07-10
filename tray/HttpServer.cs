@@ -1,18 +1,21 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 
 namespace ShutdownPcTray
 {
     /// <summary>
-    /// Lightweight HTTP server built on HttpListener.
-    /// Serves the frontend SPA and provides the power management API.
+    /// Lightweight HTTP server built on TcpListener.
+    /// Binds to 0.0.0.0 (all interfaces) without requiring admin rights
+    /// or URL ACL configuration. Handles HTTP/1.0 and HTTP/1.1 requests.
     /// </summary>
     class HttpServer : IDisposable
     {
-        private HttpListener _listener;
+        private TcpListener _listener;
         private readonly int _port;
         private Thread _listenThread;
         private volatile bool _running;
@@ -24,43 +27,13 @@ namespace ShutdownPcTray
 
         public void Start()
         {
-            // Try to bind to + (0.0.0.0) first — allows access from all network interfaces.
-            // If access is denied (not running as admin / no URL ACL), fall back to localhost-only.
-            _listener = TryStart("+") ?? TryStart("localhost");
-            if (_listener == null)
-            {
-                throw new InvalidOperationException(
-                    string.Format("Failed to start HTTP server on port {0}. " +
-                    "Try running as administrator, or use: netsh http add urlacl url=http://+:{0}/ user=everyone",
-                    _port));
-            }
+            _listener = new TcpListener(IPAddress.Any, _port);
+            _listener.Start();
 
             _running = true;
             _listenThread = new Thread(ListenLoop);
             _listenThread.IsBackground = true;
             _listenThread.Start();
-        }
-
-        private HttpListener TryStart(string host)
-        {
-            try
-            {
-                var listener = new HttpListener();
-                listener.Prefixes.Add(string.Format("http://{0}:{1}/", host, _port));
-                listener.Start();
-                return listener;
-            }
-            catch (HttpListenerException ex)
-            {
-                // Access denied (error code 5) — will try next host
-                if (ex.ErrorCode == 5)
-                    return null;
-                throw;
-            }
-            catch
-            {
-                return null;
-            }
         }
 
         private void ListenLoop()
@@ -69,12 +42,11 @@ namespace ShutdownPcTray
             {
                 try
                 {
-                    var context = _listener.GetContext();
-                    ThreadPool.QueueUserWorkItem(_ => HandleRequest(context));
+                    var client = _listener.AcceptTcpClient();
+                    ThreadPool.QueueUserWorkItem(_ => HandleClient(client));
                 }
-                catch (HttpListenerException)
+                catch (ObjectDisposedException)
                 {
-                    // Listener stopped
                     break;
                 }
                 catch
@@ -84,98 +56,165 @@ namespace ShutdownPcTray
             }
         }
 
-        private void HandleRequest(HttpListenerContext context)
+        private void HandleClient(TcpClient client)
         {
             try
             {
-                string path = context.Request.Url.AbsolutePath.TrimEnd('/');
-                if (string.IsNullOrEmpty(path))
-                    path = "/";
-
-                // --- API routes ---
-                if (path == "/api/power")
+                using (client)
+                using (var stream = client.GetStream())
                 {
-                    HandlePowerApi(context);
-                    return;
-                }
-                if (path == "/api/cancel")
-                {
-                    HandleCancelApi(context);
-                    return;
-                }
+                    // Read the request line and headers
+                    var reader = new StreamReader(stream, Encoding.UTF8);
+                    string requestLine = reader.ReadLine();
+                    if (string.IsNullOrEmpty(requestLine))
+                        return;
 
-                // --- Static files ---
-                ServeStaticFile(context, path);
+                    var parts = requestLine.Split(' ');
+                    if (parts.Length < 2)
+                    {
+                        WriteRaw(stream, "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n");
+                        return;
+                    }
+
+                    string method = parts[0];
+                    string path = parts[1];
+
+                    // Read headers to consume the full request
+                    int contentLength = 0;
+                    string line;
+                    while (!string.IsNullOrEmpty(line = reader.ReadLine()))
+                    {
+                        if (line.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
+                        {
+                            int.TryParse(line.Substring(15).Trim(), out contentLength);
+                        }
+                    }
+
+                    // Consume body (if any)
+                    if (contentLength > 0)
+                    {
+                        char[] body = new char[contentLength];
+                        reader.Read(body, 0, contentLength);
+                    }
+
+                    if (method != "GET")
+                    {
+                        WriteRaw(stream, "HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\n\r\n");
+                        return;
+                    }
+
+                    // Normalize path
+                    string uriPath = path;
+                    int qIdx = path.IndexOf('?');
+                    if (qIdx >= 0)
+                        uriPath = path.Substring(0, qIdx);
+                    if (uriPath.EndsWith("/"))
+                        uriPath = uriPath.TrimEnd('/');
+                    if (string.IsNullOrEmpty(uriPath))
+                        uriPath = "/";
+
+                    // Parse query string for API routes
+                    var query = new Dictionary<string, string>();
+                    if (qIdx >= 0 && qIdx + 1 < path.Length)
+                    {
+                        string qs = path.Substring(qIdx + 1);
+                        foreach (var pair in qs.Split('&'))
+                        {
+                            var kv = pair.Split('=');
+                            if (kv.Length == 2)
+                                query[Uri.UnescapeDataString(kv[0])] = Uri.UnescapeDataString(kv[1]);
+                            else if (kv.Length == 1)
+                                query[Uri.UnescapeDataString(kv[0])] = "";
+                        }
+                    }
+
+                    // --- Route handling ---
+                    if (uriPath == "/api/power")
+                    {
+                        HandlePowerApi(stream, query);
+                    }
+                    else if (uriPath == "/api/cancel")
+                    {
+                        HandleCancelApi(stream);
+                    }
+                    else
+                    {
+                        ServeStaticFile(stream, uriPath);
+                    }
+                }
             }
-            catch (Exception ex)
+            catch
             {
-                WriteError(context, 500, ex.Message);
+                // Ignore client disconnects
             }
         }
 
-        private void HandlePowerApi(HttpListenerContext context)
+        private void HandlePowerApi(NetworkStream stream, Dictionary<string, string> query)
         {
-            var query = context.Request.QueryString;
-            string action = query["action"] ?? "shutdown";
-            string timeoutStr = query["timeout"] ?? "30";
-            string forceStr = query["force"];
+            string action;
+            query.TryGetValue("action", out action);
+            if (action == null) action = "shutdown";
 
             int timeout = 30;
-            int.TryParse(timeoutStr, out timeout);
+            string timeoutStr;
+            if (query.TryGetValue("timeout", out timeoutStr))
+                int.TryParse(timeoutStr, out timeout);
             timeout = Math.Max(0, Math.Min(600, timeout));
 
-            bool force = forceStr != "false";
+            bool force = true;
+            string forceStr;
+            if (query.TryGetValue("force", out forceStr))
+                force = forceStr != "false";
 
             switch (action)
             {
                 case "shutdown":
                     PowerManager.FirePowerAction("shutdown", timeout, force);
-                    WriteJson(context, 200, new { ok = true, action, message = string.Format("Shut down in {0} seconds", timeout) });
+                    WriteJson(stream, 200, new { ok = true, action, message = string.Format("Shut down in {0} seconds", timeout) });
                     return;
 
                 case "restart":
                     PowerManager.FirePowerAction("restart", timeout, force);
-                    WriteJson(context, 200, new { ok = true, action, message = string.Format("Restart in {0} seconds", timeout) });
+                    WriteJson(stream, 200, new { ok = true, action, message = string.Format("Restart in {0} seconds", timeout) });
                     return;
 
                 case "hibernate":
                     PowerManager.FirePowerAction("hibernate", 0, false);
-                    WriteJson(context, 200, new { ok = true, action, message = "Hibernating..." });
+                    WriteJson(stream, 200, new { ok = true, action, message = "Hibernating..." });
                     return;
 
                 case "sleep":
                     PowerManager.Sleep();
-                    WriteJson(context, 200, new { ok = true, action, message = "Sleeping..." });
+                    WriteJson(stream, 200, new { ok = true, action, message = "Sleeping..." });
                     return;
 
                 case "logout":
                     PowerManager.FirePowerAction("logout", 0, false);
-                    WriteJson(context, 200, new { ok = true, action, message = "Logging off..." });
+                    WriteJson(stream, 200, new { ok = true, action, message = "Logging off..." });
                     return;
 
                 default:
-                    WriteJson(context, 400, new { ok = false, error = string.Format("Unknown action \"{0}\". Valid: shutdown, restart, hibernate, sleep, logout", action) });
+                    WriteJson(stream, 400, new { ok = false, error = string.Format("Unknown action \"{0}\". Valid: shutdown, restart, hibernate, sleep, logout", action) });
                     return;
             }
         }
 
-        private void HandleCancelApi(HttpListenerContext context)
+        private void HandleCancelApi(NetworkStream stream)
         {
             string error = PowerManager.Cancel();
             if (error == null)
             {
-                WriteJson(context, 200, new { ok = true, message = "Scheduled operation has been cancelled" });
+                WriteJson(stream, 200, new { ok = true, message = "Scheduled operation has been cancelled" });
             }
             else
             {
-                WriteJson(context, 500, new { ok = false, message = "No pending operation to cancel, or cancellation failed", details = error });
+                WriteJson(stream, 500, new { ok = false, message = "No pending operation to cancel, or cancellation failed", details = error });
             }
         }
 
-        private void ServeStaticFile(HttpListenerContext context, string path)
+        private void ServeStaticFile(NetworkStream stream, string uriPath)
         {
-            // Normalize: remove leading "/", default to index.html
-            string relativePath = path.TrimStart('/');
+            string relativePath = uriPath.TrimStart('/');
             if (string.IsNullOrEmpty(relativePath))
                 relativePath = "index.html";
 
@@ -185,7 +224,8 @@ namespace ShutdownPcTray
                 relativePath = "index.html";
                 if (!StaticFiles.Exists(relativePath))
                 {
-                    WriteHtml(context, 200, "<h1>⚠️ Build not found</h1><p>Run <code>bun run build:frontend</code> first, or place <code>dist/</code> next to the executable.</p>");
+                    string html = "<h1>⚠️ Build not found</h1><p>Run <code>bun run build:frontend</code> first.</p>";
+                    WriteRaw(stream, StatusLine(200) + "Content-Type: text/html; charset=utf-8\r\nContent-Length: " + Encoding.UTF8.GetByteCount(html) + "\r\n\r\n" + html);
                     return;
                 }
             }
@@ -195,31 +235,53 @@ namespace ShutdownPcTray
                 byte[] data = StaticFiles.Read(relativePath);
                 string mime = StaticFiles.GetMimeType(relativePath);
 
-                context.Response.ContentType = mime;
-                context.Response.ContentLength64 = data.Length;
-                context.Response.OutputStream.Write(data, 0, data.Length);
-                context.Response.OutputStream.Flush();
-                context.Response.StatusCode = 200;
+                var sb = new StringBuilder();
+                sb.Append(StatusLine(200));
+                sb.Append("Content-Type: ").Append(mime).Append("\r\n");
+                sb.Append("Content-Length: ").Append(data.Length).Append("\r\n");
+                sb.Append("Connection: close\r\n\r\n");
+
+                byte[] header = Encoding.ASCII.GetBytes(sb.ToString());
+                stream.Write(header, 0, header.Length);
+                stream.Write(data, 0, data.Length);
+                stream.Flush();
             }
             catch
             {
-                WriteError(context, 500, "Failed to read file");
-            }
-            finally
-            {
-                try { context.Response.OutputStream.Close(); } catch { }
+                WriteJson(stream, 500, new { ok = false, error = "Failed to read file" });
             }
         }
 
-        private void WriteJson(HttpListenerContext context, int statusCode, object data)
+        // ── Response helpers ────────────────────────────────────────
+
+        private static string StatusLine(int code)
+        {
+            string reason = code == 200 ? "OK" : code == 400 ? "Bad Request" : code == 500 ? "Internal Server Error" : "";
+            return string.Format("HTTP/1.1 {0} {1}\r\n", code, reason);
+        }
+
+        private void WriteRaw(NetworkStream stream, string response)
+        {
+            byte[] bytes = Encoding.UTF8.GetBytes(response);
+            stream.Write(bytes, 0, bytes.Length);
+            stream.Flush();
+        }
+
+        private void WriteJson(NetworkStream stream, int statusCode, object data)
         {
             string json = JsonSerialize(data);
-            byte[] bytes = Encoding.UTF8.GetBytes(json);
-            context.Response.StatusCode = statusCode;
-            context.Response.ContentType = "application/json; charset=utf-8";
-            context.Response.ContentLength64 = bytes.Length;
-            context.Response.OutputStream.Write(bytes, 0, bytes.Length);
-            context.Response.OutputStream.Close();
+            byte[] body = Encoding.UTF8.GetBytes(json);
+
+            var sb = new StringBuilder();
+            sb.Append(StatusLine(statusCode));
+            sb.Append("Content-Type: application/json; charset=utf-8\r\n");
+            sb.Append("Content-Length: ").Append(body.Length).Append("\r\n");
+            sb.Append("Connection: close\r\n\r\n");
+
+            byte[] header = Encoding.ASCII.GetBytes(sb.ToString());
+            stream.Write(header, 0, header.Length);
+            stream.Write(body, 0, body.Length);
+            stream.Flush();
         }
 
         private static string JsonEncode(string s)
@@ -280,26 +342,10 @@ namespace ShutdownPcTray
             return sb.ToString();
         }
 
-        private void WriteHtml(HttpListenerContext context, int statusCode, string html)
-        {
-            byte[] bytes = Encoding.UTF8.GetBytes(html);
-            context.Response.StatusCode = statusCode;
-            context.Response.ContentType = "text/html; charset=utf-8";
-            context.Response.ContentLength64 = bytes.Length;
-            context.Response.OutputStream.Write(bytes, 0, bytes.Length);
-            context.Response.OutputStream.Close();
-        }
-
-        private void WriteError(HttpListenerContext context, int statusCode, string message)
-        {
-            WriteJson(context, statusCode, new { ok = false, error = message });
-        }
-
         public void Dispose()
         {
             _running = false;
             try { _listener.Stop(); } catch { }
-            try { _listener.Close(); } catch { }
         }
     }
 }
