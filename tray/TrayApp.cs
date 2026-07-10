@@ -33,8 +33,8 @@ namespace ShutdownPcTray
             var handle = GetConsoleWindow();
             ShowWindow(handle, 0);
 
-            // Initialize static file serving
-            StaticFiles.Initialize();
+            // Initialize embedded static files
+            EmbeddedFiles.Setup();
 
             // Start HTTP server
             _server = new HttpServer(port);
