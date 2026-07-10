@@ -3,103 +3,17 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Net.Http;
-using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
 
 namespace ShutdownPcTray
 {
-    static class Program
-    {
-        [STAThread]
-        static void Main()
-        {
-            // Ensure single instance
-            bool createdNew;
-            using (new Mutex(true, "ShutdownMyPC-SingleInstance", out createdNew))
-            {
-                if (!createdNew)
-                    return;
-            }
-
-            // Hide console window immediately
-            var handle = GetConsoleWindow();
-            ShowWindow(handle, 0);
-
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
-
-            // Let the user enter a port if the default is taken
-            int port = PromptForPortIfBusy(3021);
-            if (port < 0) return; // user cancelled
-
-            var app = new TrayApp(port);
-            Application.Run();
-            app.Dispose();
-        }
-
-        /// <summary>
-        /// Check if a TCP port is free. If not, show an InputBox for a new port.
-        /// Returns -1 if user cancelled, or a valid available port.
-        /// </summary>
-        private static int PromptForPortIfBusy(int defaultPort)
-        {
-            int port = defaultPort;
-            while (port > 0)
-            {
-                if (IsPortFree(port))
-                    return port;
-
-                string input = Microsoft.VisualBasic.Interaction.InputBox(
-                    string.Format("端口 {0} 已被占用，请输入新的监听端口：", port),
-                    "端口冲突",
-                    (port + 1).ToString(),
-                    -1, -1);
-
-                if (string.IsNullOrWhiteSpace(input))
-                    return -1; // cancelled
-
-                if (!int.TryParse(input.Trim(), out port) || port < 1 || port > 65535)
-                {
-                    MessageBox.Show("无效端口号（1-65535），请重试。", "输入错误",
-                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    port = -2; // retry
-                }
-            }
-            return -1;
-        }
-
-        private static bool IsPortFree(int port)
-        {
-            try
-            {
-                using (var tcp = new System.Net.Sockets.TcpClient())
-                {
-                    var ar = tcp.BeginConnect("127.0.0.1", port, null, null);
-                    bool connected = ar.AsyncWaitHandle.WaitOne(500);
-                    if (connected)
-                    {
-                        tcp.EndConnect(ar);
-                        return false; // can connect = in use
-                    }
-                    return true; // can't connect = free
-                }
-            }
-            catch
-            {
-                return true;
-            }
-        }
-
-        [DllImport("kernel32.dll")]
-        static extern IntPtr GetConsoleWindow();
-
-        [DllImport("user32.dll")]
-        static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-    }
-
-    partial class TrayApp : IDisposable
+    /// <summary>
+    /// System tray wrapper: creates the tray icon, context menu,
+    /// starts the HTTP server, and manages the lifecycle.
+    /// </summary>
+    class TrayApp : IDisposable
     {
         [DllImport("kernel32.dll")]
         static extern IntPtr GetConsoleWindow();
@@ -107,130 +21,26 @@ namespace ShutdownPcTray
         [DllImport("user32.dll")]
         static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
-        // ── Fields ─────────────────────────────────────────────────
         private NotifyIcon _tray;
-        private HttpClient _http;
-        private Process _serverProc;
-        private string _serverExePath;
-        private string _baseUrl;
+        private HttpServer _server;
         private int _port;
-
-        // EMBEDDED_SERVER_LEN is defined by build.js which generates ServerSize.cs
-        // with the actual value. If ServerSize.cs doesn't exist, use 0 (standalone mode).
-#if EMBEDDED_SERVER_LEN
-        private const long SERVER_LEN = SERVER_LEN_BUILD;
-#else
-        private const long SERVER_LEN = 0;
-#endif
 
         public TrayApp(int port)
         {
             _port = port;
-            _baseUrl = string.Format("http://localhost:{0}", port);
-            _http = new HttpClient();
-            _http.Timeout = TimeSpan.FromSeconds(5);
 
+            // Hide console
             var handle = GetConsoleWindow();
             ShowWindow(handle, 0);
 
-            _serverExePath = ExtractServerExe();
-            if (_serverExePath == null)
-            {
-                // Fallback: look for adjacent file
-                _serverExePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "shutdown-my-pc.exe");
-                if (!File.Exists(_serverExePath))
-                    _serverExePath = "shutdown-my-pc.exe";
-            }
+            // Initialize static file serving
+            StaticFiles.Initialize();
 
-            StartServer();
+            // Start HTTP server
+            _server = new HttpServer(port);
+            _server.Start();
+
             CreateTray();
-        }
-
-        /// <summary>
-        /// Extract embedded server exe.
-        /// Structure: [tray exe N bytes] + [server exe SERVER_LEN bytes]
-        /// No marker, no padding — the server data is simply appended after the tray exe.
-        /// </summary>
-        private string ExtractServerExe()
-        {
-            if (SERVER_LEN <= 0)
-                return null;
-
-            try
-            {
-                string selfPath = Assembly.GetExecutingAssembly().Location;
-                long selfLen = new FileInfo(selfPath).Length;
-                long trayLen = selfLen - SERVER_LEN;
-
-                if (trayLen <= 0 || trayLen > selfLen)
-                    return null;
-
-                // Extract server portion: from trayLen to end of file
-                string tempDir = Path.Combine(Path.GetTempPath(), "ShutdownMyPc");
-                Directory.CreateDirectory(tempDir);
-                string tempExe = Path.Combine(tempDir, "shutdown-my-pc.exe");
-
-                using (var src = File.OpenRead(selfPath))
-                using (var dst = new FileStream(tempExe, FileMode.Create, FileAccess.Write))
-                {
-                    src.Seek(trayLen, SeekOrigin.Begin);
-                    byte[] buf = new byte[1024 * 1024]; // 1 MB buffer
-                    long remaining = SERVER_LEN;
-                    while (remaining > 0)
-                    {
-                        int read = src.Read(buf, 0, (int)Math.Min(buf.Length, remaining));
-                        if (read <= 0) break;
-                        dst.Write(buf, 0, read);
-                        remaining -= read;
-                    }
-                }
-
-                return tempExe;
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        private void StartServer()
-        {
-            try
-            {
-                var psi = new ProcessStartInfo(_serverExePath);
-                psi.UseShellExecute = false;
-                psi.CreateNoWindow = true;
-                psi.WindowStyle = ProcessWindowStyle.Hidden;
-                psi.RedirectStandardOutput = true;
-                psi.RedirectStandardError = true;
-                psi.EnvironmentVariables["PORT"] = _port.ToString();
-                _serverProc = Process.Start(psi);
-                _serverProc.BeginOutputReadLine();
-                _serverProc.BeginErrorReadLine();
-            }
-            catch (Exception ex)
-            {
-                if (_tray != null)
-                    _tray.ShowBalloonTip(3000, "启动失败", ex.Message, ToolTipIcon.Error);
-                Environment.Exit(1);
-            }
-        }
-
-        public void WaitForServer()
-        {
-            for (int i = 0; i < 30; i++)
-            {
-                try
-                {
-                    var resp = _http.GetAsync(_baseUrl + "/api/cancel")
-                        .GetAwaiter().GetResult();
-                    if (resp.StatusCode == System.Net.HttpStatusCode.OK ||
-                        resp.StatusCode == System.Net.HttpStatusCode.InternalServerError)
-                        return;
-                }
-                catch { }
-                Thread.Sleep(500);
-            }
         }
 
         private void CreateTray()
@@ -243,7 +53,7 @@ namespace ShutdownPcTray
             var menu = new ContextMenuStrip();
             menu.Items.Add("打开面板", null, OnOpen);
             menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add("取消计划操作", null, (s, e) => CallApi("/api/cancel", ""));
+            menu.Items.Add("取消计划操作", null, (s, e) => CancelOperation());
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("退出", null, (s, e) => Quit());
 
@@ -260,6 +70,36 @@ namespace ShutdownPcTray
                 }
                 catch { }
             }, null, 2000, System.Threading.Timeout.Infinite);
+        }
+
+        private void OnOpen(object sender, EventArgs e)
+        {
+            try
+            {
+                string url = string.Format("http://localhost:{0}/", _port);
+                Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+            }
+            catch { }
+        }
+
+        private void CancelOperation()
+        {
+            string error = PowerManager.Cancel();
+            if (error == null)
+                _tray.ShowBalloonTip(3000, "Shutdown My PC", "已取消计划操作", ToolTipIcon.Info);
+            else
+                _tray.ShowBalloonTip(3000, "Shutdown My PC", "没有待取消的操作", ToolTipIcon.Info);
+        }
+
+        private void Quit()
+        {
+            _tray.Visible = false;
+            if (_server != null)
+            {
+                _server.Dispose();
+                _server = null;
+            }
+            Application.Exit();
         }
 
         private Icon LoadTrayIcon()
@@ -304,45 +144,19 @@ namespace ShutdownPcTray
             "MimsAnhEJX+fBwxW/tbPCvIke9Hqo8lZBc859O+GhfHXL0We30cpvtZ20YIlMhzoV6Cp/wdxn/1gCcDr" +
             "HAAAAABJRU5ErkJggg==";
 
-        private void OnOpen(object sender, EventArgs e)
-        {
-            try
-            {
-                Process.Start(new ProcessStartInfo(_baseUrl) { UseShellExecute = true });
-            }
-            catch { }
-        }
-
-        private async void CallApi(string path, string query)
-        {
-            try
-            {
-                string url = _baseUrl + path + "?" + query;
-                var resp = await _http.GetAsync(url);
-                string body = await resp.Content.ReadAsStringAsync();
-                string msg = resp.IsSuccessStatusCode ? "操作已执行" : body;
-                var icon = resp.IsSuccessStatusCode ? ToolTipIcon.Info : ToolTipIcon.Error;
-                _tray.ShowBalloonTip(3000, "Shutdown My PC", msg, icon);
-            }
-            catch (Exception ex)
-            {
-                _tray.ShowBalloonTip(3000, "请求失败", ex.Message, ToolTipIcon.Error);
-            }
-        }
-
-        private void Quit()
-        {
-            _tray.Visible = false;
-            try { _serverProc.Kill(); } catch { }
-            try { if (_serverExePath != null && _serverExePath.Contains(Path.GetTempPath())) File.Delete(_serverExePath); } catch { }
-            Application.Exit();
-        }
-
         public void Dispose()
         {
-            if (_tray != null) _tray.Dispose();
-            if (_http != null) _http.Dispose();
-            if (_serverProc != null) _serverProc.Dispose();
+            if (_tray != null)
+            {
+                _tray.Visible = false;
+                _tray.Dispose();
+                _tray = null;
+            }
+            if (_server != null)
+            {
+                _server.Dispose();
+                _server = null;
+            }
         }
     }
 }
