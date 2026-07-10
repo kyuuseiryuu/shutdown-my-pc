@@ -64,3 +64,30 @@ jobs:
 
             ### 🔒 Checksums
 
+            ```
+            ${{ steps.checksum.outputs.value }}  ShutdownMyPC.exe
+            ```
+
+            ### ⚡ What's inside
+
+            A single native Windows executable (~1 MB) with:
+
+            - **Built-in HTTP server** (C# HttpListener) — no Bun, no Node.js, no runtime needed
+            - **Frontend SPA** embedded directly in the .exe — React 19 + Ant Design 5
+            - **System tray icon** with right-click menu (open panel, cancel, quit)
+            - **5 power actions**: Shut Down, Restart, Hibernate, Sleep, Log Off
+            - **Custom countdown timer** (0鈥�s) with optional force-close
+            - **Port conflict detection** — auto-prompt for a new port if 3021 is in use
+            - **Single instance** — only one instance runs at a time
+
+            ### 🚀 Usage
+
+            1. Download and run `ShutdownMyPC.exe`.
+            2. A tray icon appears in the notification area.
+            3. Double-click the tray icon or right-click 鈫? "打开面板" to open the web UI.
+            4. Access from other devices at `http://<your-ip>:3021/`.
+
+            > ⚠ Windows-only. Requires .NET Framework 4.5+ (pre-installed on modern Windows).
+          files: |
+            ShutdownMyPC.exe
+            checksums.txt
