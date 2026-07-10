@@ -5,6 +5,7 @@
 [English](README.md) · 🌐 **中文** · [日本語](README.ja-JP.md)
 
 ![Screenshot](screenshots/screenshots.png)
+![Screenshot](screenshots/screenshots2.png)
 
 ## 🎯 动机
 

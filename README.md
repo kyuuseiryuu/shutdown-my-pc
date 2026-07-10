@@ -5,6 +5,7 @@
 🌐 **English** · [中文](README.zh-CN.md) · [日本語](README.ja-JP.md)
 
 ![Screenshot](screenshots/screenshots.png)
+![Screenshot](screenshots/screenshots2.png)
 
 ## 🎯 Motivation
 
